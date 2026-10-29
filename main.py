@@ -3,21 +3,30 @@ import cv2
 import mediapipe as mp
 import time
 
-# Configuration de MediaPipe
-BaseOptions = mp.tasks.BaseOptions
-HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
+from src.gesture_detector import GestureDetector
 
-options = HandLandmarkerOptions(
+BaseOptions = mp.tasks.BaseOptions
+vision = mp.tasks.vision
+RunningMode = vision.RunningMode
+
+hand_options = vision.HandLandmarkerOptions(
     base_options=BaseOptions(
         model_asset_path="models/hand_landmarker.task"
     ),
-    running_mode=VisionRunningMode.VIDEO,
+    running_mode=RunningMode.VIDEO,
     num_hands=2
 )
 
-# Initialisation de la webcam
+face_options = vision.FaceLandmarkerOptions(
+    base_options=BaseOptions(
+        model_asset_path="models/face_landmarker.task"
+    ),
+    running_mode=RunningMode.VIDEO,
+    num_faces=1
+)
+
+gesture_detector = GestureDetector()
+
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
 if not cap.isOpened():
@@ -26,65 +35,118 @@ if not cap.isOpened():
 start_time = time.monotonic()
 last_timestamp = -1
 
-with HandLandmarker.create_from_options(options) as detector:
+try:
+    with (
+        vision.HandLandmarker.create_from_options(
+            hand_options
+        ) as hand_detector,
+        vision.FaceLandmarker.create_from_options(
+            face_options
+        ) as face_detector
+    ):
+        while True:
+            success, frame = cap.read()
 
-    while True:
-        ret, frame = cap.read()
+            if not success:
+                break
 
-        if not ret:
-            break
+            # Miroir AVANT détection pour garder
+            # la gauche et la droite cohérentes
+            frame = cv2.flip(frame, 1)
 
-        # Conversion BGR vers RGB
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(
+                frame, cv2.COLOR_BGR2RGB
+            )
 
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=rgb
-        )
+            image = mp.Image(
+                image_format=mp.ImageFormat.SRGB,
+                data=rgb
+            )
 
-        # Timestamp croissant obligatoire en mode VIDEO
-        timestamp = int((time.monotonic() - start_time) * 1000)
-        timestamp = max(timestamp, last_timestamp + 1)
-        last_timestamp = timestamp
+            timestamp = int(
+                (time.monotonic() - start_time) * 1000
+            )
+            timestamp = max(
+                timestamp, last_timestamp + 1
+            )
+            last_timestamp = timestamp
 
-        result = detector.detect_for_video(
-            mp_image, timestamp
-        )
+            hands = hand_detector.detect_for_video(
+                image, timestamp
+            )
 
-        height, width = frame.shape[:2]
+            face = face_detector.detect_for_video(
+                image, timestamp
+            )
 
-        # Affichage des points des mains
-        for hand in result.hand_landmarks:
-            for i, landmark in enumerate(hand):
+            visible, gesture = gesture_detector.detect(
+                hands, face
+            )
 
-                x = int(landmark.x * width)
-                y = int(landmark.y * height)
+            height, width = frame.shape[:2]
 
-                color = (0, 255, 0)
+            # Afficher les doigts
+            for hand in hands.hand_landmarks:
+                for index in [8, 12]:
+                    point = hand[index]
+                    x = int(point.x * width)
+                    y = int(point.y * height)
 
-                # Index (8) et majeur (12) en rouge
-                if i in [8, 12]:
-                    color = (0, 0, 255)
+                    cv2.circle(
+                        frame, (x, y),
+                        7, (0, 0, 255), -1
+                    )
 
-                cv2.circle(frame, (x, y), 5, color, -1)
+            # Afficher les tempes
+            if face.face_landmarks:
+                landmarks = face.face_landmarks[0]
 
-        # Image en miroir pour l'affichage
-        frame = cv2.flip(frame, 1)
+                for index in [127, 356]:
+                    point = landmarks[index]
 
-        cv2.putText(
-            frame,
-            "VANISH - HAND TRACKING",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2
-        )
+                    x = int(point.x * width)
+                    y = int(point.y * height)
 
-        cv2.imshow("Vanish", frame)
+                    cv2.circle(
+                        frame, (x, y),
+                        9, (255, 0, 0), 2
+                    )
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+            status = (
+                "VISIBLE" if visible else "INVISIBLE"
+            )
 
-cap.release()
-cv2.destroyAllWindows()
+            color = (
+                (0, 255, 0) if visible
+                else (0, 0, 255)
+            )
+
+            cv2.putText(
+                frame,
+                f"VANISH: {status}",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                color,
+                2
+            )
+
+            if gesture:
+                cv2.putText(
+                    frame,
+                    f"Gesture: {gesture}",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2
+                )
+
+            cv2.imshow("Vanish", frame)
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
