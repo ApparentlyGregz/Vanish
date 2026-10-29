@@ -4,6 +4,7 @@ import mediapipe as mp
 import time
 
 from src.gesture_detector import GestureDetector
+from src.invisibility import InvisibilityEffect
 
 BaseOptions = mp.tasks.BaseOptions
 vision = mp.tasks.vision
@@ -26,6 +27,7 @@ face_options = vision.FaceLandmarkerOptions(
 )
 
 gesture_detector = GestureDetector()
+invisibility = InvisibilityEffect()
 
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
@@ -82,6 +84,8 @@ try:
             visible, gesture = gesture_detector.detect(
                 hands, face
             )
+            # Image destinée à l'affichage
+            output_frame = invisibility.apply(frame, visible)
 
             height, width = frame.shape[:2]
 
@@ -142,9 +146,15 @@ try:
                     2
                 )
 
-            cv2.imshow("Vanish", frame)
+            # Afficher le flux modifié
+            cv2.imshow("Vanish", output_frame)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord("b"):
+                invisibility.capture_background(frame)
+
+            elif key == ord("q"):
                 break
 
 finally:
